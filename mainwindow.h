@@ -30,6 +30,10 @@ private:
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud;//加载点云的指针
 
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr colored_point;//带颜色的点云
+
+    //QString dir_name;
+
 public slots:
     //按钮开始槽函数
     void start();
@@ -37,5 +41,14 @@ public slots:
     void downSample();
     //离群点滤波
     void outliersFilter();
+    //点云属性获取
+    void getProperties(pcl::PointCloud<pcl::PointXYZ>::Ptr);
+    //分割函数
+    void regionSegmentation();
+
+    //添加点云文件
+    void addDataFiles();
+    //双击文件操作槽函数
+    void onDataTreeDoubleClicked();
 };
 #endif // MAINWINDOW_H
