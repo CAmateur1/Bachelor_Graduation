@@ -6,26 +6,12 @@
 #include <QFileDialog>
 #include <QStringList>
 #include <QFileInfoList>
+#include <QTreeWidget>//树形结构头文件
+#include <QTreeWidgetItem>
 #include <QDir>
 #include <QDebug>
-#include <QTreeWidget>
-#include <QTreeWidgetItem>
-#include <QVBoxLayout>
-#include <QHeaderView>
-
-//区域生长算法头文件
-#include <pcl/point_types.h>
-#include <pcl/search/search.h>
-#include <pcl/search/kdtree.h>
-#include <pcl/features/normal_3d.h>
-#include <pcl/filters/filter_indices.h>//过滤缺失坐标信息的点
-#include <pcl/segmentation/region_growing.h>
-
-#include <pcl/io/pcd_io.h>
-#include <pcl/io/ply_io.h>
-#include <pcl/filters/voxel_grid.h>
-#include <pcl/filters/statistical_outlier_removal.h>
-
+#include <QVBoxLayout>//布局头文件
+#include <QHeaderView>//水平滚动条
 
 #include "vtkRenderWindow.h"
 #include <vtkAutoInit.h>
@@ -37,11 +23,14 @@ MainWindow::MainWindow(QWidget *parent)
     , ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
+   // point_cloud_method_ui = new PointCloudMethod(ui);
 
     //将点云显示窗口与点云显示指针连接起来
     qvtkWidget = new QVTKWidget(ui->viewerWidget);
 
     cloud.reset(new pcl::PointCloud<pcl::PointXYZ>());//点云指针初始化
+
+    colored_point.reset(new pcl::PointCloud<pcl::PointXYZRGB>);
 
     viewer.reset (new pcl::visualization::PCLVisualizer ("viewer", false));//点云窗口指针初始化
 
@@ -77,6 +66,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     connect(ui->closeButton, &QPushButton::clicked, this, &QMainWindow::close);//关闭窗口按钮
 
+    connect(ui->passthroughButton, &QPushButton::clicked, this, &MainWindow::passThrough);//直通滤波
+
     connect(ui->down_sampleButton, &QPushButton::clicked, this, &MainWindow::downSample);//降采样按钮
 
     connect(ui->outliers_filterButton, &QPushButton::clicked, this, &MainWindow::outliersFilter);//离群点滤波按钮
@@ -93,16 +84,14 @@ MainWindow::~MainWindow()
     delete ui;
 }
 
-//开始显示点云槽函数
+//打开点云文件
 void MainWindow::start()
 {
-    QString path = QFileDialog::getOpenFileName(this, "打开文件", "D:\\software_my\\CloudPoint\\example", tr("PointCloud(*.ply)"));
+    QString path = QFileDialog::getOpenFileName(this, "打开文件", "D:\\software_my\\CloudPoint\\example", tr("PointCloud(*.ply *.pcd)"));
 
     //qDebug()<<path.toUtf8().data();
 
-    std::string file_path = path.toStdString();
-
-    pcl::io::loadPLYFile(file_path, *cloud);
+    processor.loadPointCloudFile(path, cloud);
 
     viewer->addPointCloud(cloud, "source_cloud");//添加点云
 
@@ -111,60 +100,6 @@ void MainWindow::start()
     qvtkWidget->update();
 
     getProperties(cloud);
-}
-
-//降采样
-void MainWindow::downSample()
-{
-    pcl::PCLPointCloud2::Ptr voxel_cloud (new pcl::PCLPointCloud2());//点云数据指针
-
-    pcl::PCLPointCloud2::Ptr voxel_cloud_filtered (new pcl::PCLPointCloud2());
-
-    pcl::toPCLPointCloud2(*cloud, *voxel_cloud);//点云数据类型转换
-
-    pcl::VoxelGrid<pcl::PCLPointCloud2> sor;//滤波器对象
-
-    sor.setInputCloud(voxel_cloud);
-
-    sor.setLeafSize(0.01f, 0.01f, 0.01f);//边长为1厘米的体素点
-
-    sor.filter(*voxel_cloud_filtered);//过滤，过滤后的点云存储到voxl_cloud_filtered中
-
-    viewer->removeAllPointClouds();//清楚窗口点云
-
-    pcl::fromPCLPointCloud2(*voxel_cloud_filtered, *cloud);//类型转换
-
-    viewer->addPointCloud(cloud, "down_sample_cloud");//添加新点云
-
-    qvtkWidget->update();//更新窗口内容
-}
-
-//离群点过滤
-void MainWindow::outliersFilter()
-{
-    pcl::PointCloud<pcl::PointXYZ>::Ptr statistical_outliers_removal (new pcl::PointCloud<pcl::PointXYZ>);
-
-    pcl::PointCloud<pcl::PointXYZ>::Ptr statistical_outliers_removal_filtered (new pcl::PointCloud<pcl::PointXYZ>);
-
-    pcl::StatisticalOutlierRemoval<pcl::PointXYZ> statistical_sor;
-
-    pcl::copyPointCloud(*cloud, *statistical_outliers_removal);
-
-    statistical_sor.setInputCloud(statistical_outliers_removal);
-
-    statistical_sor.setMeanK(50);
-
-    statistical_sor.setStddevMulThresh(1.0);
-
-    statistical_sor.filter(*statistical_outliers_removal_filtered);
-
-    viewer->removeAllPointClouds();
-
-    pcl::copyPointCloud(*statistical_outliers_removal_filtered, *cloud);
-
-    viewer->addPointCloud(cloud, "outliers_removal");
-
-    qvtkWidget->update();
 }
 
 //添加点云文件
@@ -180,7 +115,7 @@ void MainWindow::addDataFiles()
 
     QStringList root_path_name(dir_name);//路径名，QStringList类型
 
-    filters<<"*.ply";//文件后缀过滤
+    filters<<"*.ply"<<"*.pcd";//文件后缀过滤
 
     dir.setNameFilters(filters);//设置过滤器
 
@@ -216,14 +151,10 @@ void MainWindow::onDataTreeDoubleClicked()
 
     file_path += file_name;//合并成绝对路径
 
-    std::string file_path_s =file_path.toStdString();//转换成string类型
-
-    //qDebug()<<file_path.toUtf8().data();
-
     //重新显示点云数据
     cloud->clear();
 
-    pcl::io::loadPLYFile(file_path_s, *cloud);
+    processor.loadPointCloudFile(file_path, cloud);
 
     viewer->removeAllPointClouds();
 
@@ -236,6 +167,7 @@ void MainWindow::onDataTreeDoubleClicked()
     getProperties(cloud);
 }
 
+//获取点云属性
 void MainWindow::getProperties(pcl::PointCloud<pcl::PointXYZ>::Ptr point_cloud)
 {
     ui->propertyTree->clear();//清空当前属性窗口
@@ -248,69 +180,161 @@ void MainWindow::getProperties(pcl::PointCloud<pcl::PointXYZ>::Ptr point_cloud)
     ui->propertyTree->addTopLevelItem(size);
 }
 
+void MainWindow::getProperties(pcl::PointCloud<pcl::PointXYZRGB>::Ptr colored_cloud)
+{
+    ui->propertyTree->clear();//清空当前属性窗口
+
+    int point_sum_num = colored_cloud->size();//获取点云总数
+
+    QTreeWidgetItem* size = new QTreeWidgetItem(ui->propertyTree, QStringList()<<"Point"<<QString::number(point_sum_num));
+
+    ui->propertyTree->addTopLevelItem(size);
+}
+
+//设置按钮不可按
+void MainWindow::setButtonDisabled()
+{
+    ui->startButton->setDisabled(true);
+
+    ui->passthroughButton->setDisabled(true);
+
+    ui->down_sampleButton->setDisabled(true);
+
+    ui->outliers_filterButton->setDisabled(true);
+
+    ui->segButton->setDisabled(true);
+}
+
+//开启按钮功能
+void MainWindow::setButtonEnabled()
+{
+    ui->startButton->setDisabled(false);
+
+    ui->passthroughButton->setDisabled(false);
+
+    ui->down_sampleButton->setDisabled(false);
+
+    ui->outliers_filterButton->setDisabled(false);
+
+    ui->segButton->setDisabled(false);
+}
+
 //区域生长算法分割
 void MainWindow::regionSegmentation()
 {
-    pcl::search::Search<pcl::PointXYZ>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZ>);//创建kd树对象，方便算法索引点云
+//    processor.regionSegmentation(cloud, colored_point);
 
-    pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);//法向量存储器
+//    getProperties(colored_point);
 
-    pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> normal_estimator;//法向量计算对象
+//    qDebug()<<"分割点云窗口更新";
+//    //更新点云显示窗口
+//    viewer->removeAllPointClouds();
+//    qDebug()<<"1";
 
-    normal_estimator.setSearchMethod(tree);//设置搜索方法
+//    viewer->addPointCloud(colored_point, "colored_cloud");//添加点云
+//    qDebug()<<"2";
 
-    normal_estimator.setInputCloud(cloud);//添加点云
+//    qvtkWidget->update();
+//    qDebug()<<"3";
 
-    normal_estimator.setKSearch(50);//设置法向量估计邻近点数量
+    pcl::PointCloud<pcl::PointXYZ>::Ptr *source_cloud = &cloud;//加载点云的指针
 
-    normal_estimator.compute(*normals);//计算法向量并存储进法向量存储器
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr *colored_cloud = &colored_point;//带颜色的点云
 
+    qDebug()<<"111111";
 
-    pcl::IndicesPtr indices (new std::vector<int>);//索引容器
+    cloud_process_thread.regionSegmentationThread(source_cloud, colored_cloud);
 
-    pcl::removeNaNFromPointCloud(*cloud, *indices);//去除没有坐标的点云
+    connect(this, &MainWindow::startRegionSegmentationSig, &cloud_process_thread, &ProThread::emitRegionSegmentationSig);
 
+    connect(&cloud_process_thread.region_seg_thread, &QThread::started, this, &MainWindow::setButtonDisabled);
 
-    pcl::RegionGrowing<pcl::PointXYZ, pcl::Normal> region;//区域生长算法对象
+    connect(&cloud_process_thread.region_seg_thread, &QThread::finished, this, [=]()
+    {
+        qDebug()<<"分割点云窗口更新";
+        //更新点云显示窗口
+        viewer->removeAllPointClouds();
+        qDebug()<<"1";
 
-    region.setMinClusterSize(50);//类点数下限
+        viewer->addPointCloud(colored_point, "colored_cloud");//添加点云
+        qDebug()<<"2";
 
-    region.setMaxClusterSize(100000);//类点数上限
+        qvtkWidget->update();
+        qDebug()<<"3";
 
-    region.setSearchMethod(tree);//设置搜索方法
+        setButtonEnabled();
+    });
 
-    region.setNumberOfNeighbours(30);//设置邻点数
+    emit startRegionSegmentationSig();
+}
 
-    region.setInputCloud(cloud);//添加点云
+//降采样
+void MainWindow::downSample()
+{
+    cloud_process_thread.downSampleThread(cloud);
 
-    region.setIndices(indices);//添加索引，由去除无坐标点云函数得到
+    connect(this, &MainWindow::startDownSampleSig, &cloud_process_thread, &ProThread::emitDownSampleSig);
 
-    region.setInputNormals(normals);//添加法向量
+    connect(&cloud_process_thread.down_sample_thread, &QThread::started, this, &MainWindow::setButtonDisabled);
 
-    region.setSmoothnessThreshold(3.0 / 180.0 * M_PI);//设置聚类角度阈值
+    connect(&cloud_process_thread.down_sample_thread, &QThread::finished, this, [=]()
+    {
+        viewer->removeAllPointClouds();//窗口显示处理
 
-    region.setCurvatureThreshold(1.0);//设置区域生长起始点曲率阈值
+        viewer->addPointCloud(cloud, "down_sample");
 
+        qvtkWidget->update();
 
-    std::vector<pcl::PointIndices> clusters;//分割后的索引
+        getProperties(cloud);
 
-    region.extract(clusters);//提取索引
+        setButtonEnabled();
 
+        qDebug()<<"55555";
+    });
 
-    pcl::PointCloud<pcl::PointXYZRGB>::Ptr colored_cloud = region.getColoredCloud();//为点云上色
+    emit startDownSampleSig();
+}
 
-    colored_point = colored_cloud;
+//离群点过滤
+void MainWindow::outliersFilter()
+{
+    //processor.outliersFilter(cloud);//离群点滤波
+    qDebug()<<"000000000";
 
-    //更新点云显示窗口
+    cloud_process_thread.outliersFilterThread(cloud);
+
+    connect(this, &MainWindow::startOutliersFilterSig, &cloud_process_thread, &ProThread::emitOutliersFilterSig);
+
+    connect(&cloud_process_thread.outliers_filter_thread, &QThread::started, this, &MainWindow::setButtonDisabled);
+
+    connect(&cloud_process_thread.outliers_filter_thread, &QThread::finished, this, [=]()
+    {
+        qDebug()<<"离群点滤波完成";
+
+        viewer->removeAllPointClouds();//窗口显示处理
+
+        viewer->addPointCloud(cloud, "outliers_removal");
+
+        qvtkWidget->update();
+
+        setButtonEnabled();
+
+        getProperties(cloud);
+    });
+
+    emit startOutliersFilterSig();
+}
+
+//直通滤波
+void MainWindow::passThrough()
+{
+    processor.passThrough(cloud);
+
     viewer->removeAllPointClouds();
 
-    viewer->addPointCloud(colored_point, "source_cloud");//添加点云
-
-    viewer->addCoordinateSystem(1.0, "cloud", 0);//添加坐标系
+    viewer->addPointCloud(cloud, "passThrough_cloud");
 
     qvtkWidget->update();
 
     getProperties(cloud);
-
 }
-

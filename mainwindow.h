@@ -1,13 +1,15 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
-#include <QMainWindow>
 
-#include <pcl/point_cloud.h>
-#include <pcl/visualization/pcl_visualizer.h>
-#include "QVTKWidget.h"
+#include <QMainWindow>
+#include <QThread>
+
+#include "pointcloudmethod.h"
+#include "prothread.h"
 
 class QVTKWidget;
+class PointCloudMethod;
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -32,17 +34,22 @@ private:
 
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr colored_point;//带颜色的点云
 
-    //QString dir_name;
+    PointCloudMethod processor;//点云数据处理对象
+
+    ProThread cloud_process_thread;
 
 public slots:
     //按钮开始槽函数
     void start();
+    //直通滤波
+    void passThrough();
     //降采样
     void downSample();
     //离群点滤波
     void outliersFilter();
     //点云属性获取
     void getProperties(pcl::PointCloud<pcl::PointXYZ>::Ptr);
+    void getProperties(pcl::PointCloud<pcl::PointXYZRGB>::Ptr);
     //分割函数
     void regionSegmentation();
 
@@ -50,5 +57,14 @@ public slots:
     void addDataFiles();
     //双击文件操作槽函数
     void onDataTreeDoubleClicked();
+    //设置点云处理时禁止其他处理
+    void setButtonDisabled();
+    //打开按钮功能
+    void setButtonEnabled();
+
+signals:
+    void startDownSampleSig();
+    void startOutliersFilterSig();
+    void startRegionSegmentationSig();
 };
 #endif // MAINWINDOW_H
